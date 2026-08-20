@@ -8,7 +8,16 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_NAME, CONF_STATION, CONF_VEHICLE_ID, DEFAULT_SCAN_INTERVAL, DEFAULT_STATION, DOMAIN
+from .const import (
+    CONF_NAME,
+    CONF_STATION_FROM,
+    CONF_STATION_TO,
+    CONF_VEHICLE_ID,
+    DEFAULT_SCAN_INTERVAL,
+    DEFAULT_STATION_FROM,
+    DEFAULT_STATION_TO,
+    DOMAIN,
+)
 from .coordinator import SncbTrainCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -19,13 +28,15 @@ PLATFORMS: list[Platform] = [Platform.SENSOR]
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up SNCB Train Tracker from a config entry."""
     vehicle_id = entry.data[CONF_VEHICLE_ID]
-    station = entry.data.get(CONF_STATION, DEFAULT_STATION)
+    station_from = entry.data.get(CONF_STATION_FROM, DEFAULT_STATION_FROM)
+    station_to = entry.data.get(CONF_STATION_TO, DEFAULT_STATION_TO)
     name = entry.data.get(CONF_NAME, vehicle_id)
 
     coordinator = SncbTrainCoordinator(
         hass=hass,
         vehicle_id=vehicle_id,
-        station=station,
+        station_from=station_from,
+        station_to=station_to,
         name=name,
         scan_interval=entry.options.get("scan_interval", DEFAULT_SCAN_INTERVAL),
     )

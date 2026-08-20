@@ -1,11 +1,15 @@
 {
   "domain": "sncb_train",
   "name": "SNCB Train Tracker",
-  "codeowners": ["@local"],
+  "codeowners": [
+    "@local"
+  ],
   "config_flow": true,
   "documentation": "https://github.com/local/sncb_train",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/local/sncb_train/issues",
-  "requirements": ["aiohttp"],
-  "version": "1.0.0"
+  "requirements": [
+    "aiohttp"
+  ],
+  "version": "1.1.0"
 }
