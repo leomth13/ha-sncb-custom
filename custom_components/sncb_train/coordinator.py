@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -56,73 +57,84 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         url = f"{API_VEHICLE}?id={self.api_vehicle_id}&format=json&lang=fr"
         session = async_get_clientsession(self.hass)
 
-        try:
-            async with session.get(
-                url,
-                timeout=15,
-                headers={"User-Agent": "HomeAssistant-SNCB-Train/1.2.2"},
-            ) as response:
-                status = response.status
-                text = await response.text()
+        last_status = None
+        for attempt in range(3):
+            try:
+                async with session.get(
+                    url,
+                    timeout=20,
+                    headers={"User-Agent": "HomeAssistant-SNCB-Train/1.2.3"},
+                ) as response:
+                    last_status = response.status
+                    body = await response.text()
 
-                if status in (502, 503, 504):
-                    _LOGGER.warning(
-                        "iRail temporary error %s for %s",
-                        status,
-                        self.api_vehicle_id,
-                    )
-                    return self._keep_or_empty("temporary_error", f"http_{status}")
+                    if last_status in (502, 503, 504):
+                        _LOGGER.warning(
+                            "iRail temporary error %s for %s (attempt %s/3)",
+                            last_status,
+                            self.api_vehicle_id,
+                            attempt + 1,
+                        )
+                        if attempt < 2:
+                            await asyncio.sleep(2 * (attempt + 1))
+                            continue
+                        return self._keep_or_empty("temporary_error", f"http_{last_status}")
 
-                if status == 404:
-                    return self._handle_not_found()
+                    if last_status == 404:
+                        return self._handle_not_found()
 
-                if status != 200:
-                    _LOGGER.warning(
-                        "iRail HTTP %s for %s: %s",
-                        status,
-                        self.api_vehicle_id,
-                        text[:200],
-                    )
-                    return self._keep_or_empty("temporary_error", f"http_{status}")
+                    if last_status != 200:
+                        _LOGGER.warning(
+                            "iRail HTTP %s for %s: %s",
+                            last_status,
+                            self.api_vehicle_id,
+                            body[:200],
+                        )
+                        return self._keep_or_empty("temporary_error", f"http_{last_status}")
 
-                # Parse JSON
-                try:
-                    import json
+                    try:
+                        import json
+                        data = json.loads(body)
+                    except Exception as err:
+                        _LOGGER.warning(
+                            "Invalid JSON from iRail for %s: %s", self.api_vehicle_id, err
+                        )
+                        return self._keep_or_empty("temporary_error", "invalid_json")
 
-                    data = json.loads(text)
-                except Exception as err:
-                    _LOGGER.warning("Invalid JSON from iRail for %s: %s", self.api_vehicle_id, err)
-                    return self._keep_or_empty("temporary_error", "invalid_json")
+                    if isinstance(data, dict) and data.get("exception"):
+                        _LOGGER.info(
+                            "Journey not found for %s: %s",
+                            self.api_vehicle_id,
+                            data.get("message", data.get("exception")),
+                        )
+                        return self._handle_not_found()
 
-                # iRail sometimes returns 200 with an exception payload
-                if isinstance(data, dict) and data.get("exception"):
-                    _LOGGER.info(
-                        "Journey not found for %s: %s",
-                        self.api_vehicle_id,
-                        data.get("message", data.get("exception")),
-                    )
-                    return self._handle_not_found()
+                    parsed = self._parse_vehicle(data)
 
-                parsed = self._parse_vehicle(data)
+                    if parsed.get("status") not in (
+                        "not_found",
+                        "no_stops",
+                        "temporary_error",
+                        "data_lost",
+                    ):
+                        self._had_live_data_today = True
+                        self._last_good_data = parsed
 
-                if parsed.get("status") not in (
-                    "not_found",
-                    "no_stops",
-                    "temporary_error",
-                    "data_lost",
-                ):
-                    self._had_live_data_today = True
-                    self._last_good_data = parsed
+                    return parsed
 
-                return parsed
+            except Exception as err:
+                _LOGGER.warning(
+                    "Error fetching %s (attempt %s/3): %s",
+                    self.api_vehicle_id,
+                    attempt + 1,
+                    err,
+                )
+                if attempt < 2:
+                    await asyncio.sleep(2 * (attempt + 1))
+                    continue
+                return self._keep_or_empty("temporary_error", "exception")
 
-        except Exception as err:
-            _LOGGER.warning(
-                "Error fetching %s: %s – keeping last data if any",
-                self.api_vehicle_id,
-                err,
-            )
-            return self._keep_or_empty("temporary_error", "exception")
+        return self._keep_or_empty("temporary_error", f"http_{last_status}")
 
     def _keep_or_empty(self, status: str, warning: str | None = None) -> dict[str, Any]:
         """Return last good data or empty structure."""
@@ -341,3 +353,4 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "api_warning": None,
             "last_update": dt_util.now().isoformat(),
         }
+
