@@ -3,17 +3,14 @@
     "step": {
       "user": {
         "title": "Ajouter un train SNCB",
-        "description": "Entrez le numéro du train (ex: IC2108 ou IC2508). La gare surveillée par défaut est Gembloux.",
+        "description": "Numéro du train (ex: IC2108). Gares par défaut: Gembloux → Namur.",
         "data": {
           "vehicle_id": "Numéro du train",
-          "station": "Gare à surveiller",
+          "station_from": "Gare de départ à surveiller",
+          "station_to": "Gare d'arrivée à surveiller",
           "name": "Nom affiché (optionnel)"
         }
       }
-    },
-    "error": {
-      "cannot_connect": "Impossible de contacter l'API iRail",
-      "invalid_vehicle": "Numéro de train invalide"
     },
     "abort": {
       "already_configured": "Ce train est déjà configuré"

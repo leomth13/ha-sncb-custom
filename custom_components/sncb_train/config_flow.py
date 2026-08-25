@@ -4,18 +4,28 @@ from __future__ import annotations
 
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import selector
 
-from .const import CONF_NAME, CONF_STATION, CONF_VEHICLE_ID, DEFAULT_STATION, DOMAIN
+from .const import (
+    CONF_NAME,
+    CONF_STATION_FROM,
+    CONF_STATION_TO,
+    CONF_VEHICLE_ID,
+    DEFAULT_STATION_FROM,
+    DEFAULT_STATION_TO,
+    DOMAIN,
+)
 
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_VEHICLE_ID): selector.TextSelector(
             selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
         ),
-        vol.Optional(CONF_STATION, default=DEFAULT_STATION): selector.TextSelector(
+        vol.Required(CONF_STATION_FROM, default=DEFAULT_STATION_FROM): selector.TextSelector(
+            selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+        ),
+        vol.Required(CONF_STATION_TO, default=DEFAULT_STATION_TO): selector.TextSelector(
             selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
         ),
         vol.Optional(CONF_NAME): selector.TextSelector(
@@ -30,15 +40,10 @@ class SncbTrainConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
-    async def async_step_user(
-        self, user_input: dict | None = None
-    ) -> FlowResult:
+    async def async_step_user(self, user_input: dict | None = None) -> FlowResult:
         """Handle the initial step."""
-        errors: dict[str, str] = {}
-
         if user_input is not None:
             vehicle_id = user_input[CONF_VEHICLE_ID].strip().upper()
-            # Remove possible BE.NMBS. prefix for uniqueness
             clean_id = vehicle_id.replace("BE.NMBS.", "").replace(" ", "")
 
             await self.async_set_unique_id(clean_id)
@@ -50,16 +55,10 @@ class SncbTrainConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 title=name,
                 data={
                     CONF_VEHICLE_ID: clean_id,
-                    CONF_STATION: user_input.get(CONF_STATION, DEFAULT_STATION).strip(),
+                    CONF_STATION_FROM: user_input[CONF_STATION_FROM].strip(),
+                    CONF_STATION_TO: user_input[CONF_STATION_TO].strip(),
                     CONF_NAME: name,
                 },
             )
 
-        return self.async_show_form(
-            step_id="user",
-            data_schema=STEP_USER_DATA_SCHEMA,
-            errors=errors,
-            description_placeholders={
-                "example": "IC2108 ou IC2508",
-            },
-        )
+        return self.async_show_form(step_id="user", data_schema=STEP_USER_DATA_SCHEMA)
