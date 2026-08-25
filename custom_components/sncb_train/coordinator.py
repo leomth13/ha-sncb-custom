@@ -6,8 +6,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import aiohttp
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -48,87 +48,99 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.api_vehicle_id = vehicle_id.upper()
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Fetch data from iRail vehicle endpoint."""
+        """Fetch data from iRail vehicle endpoint.
+
+        Never raises on first failure if we can return a structured empty payload,
+        so sensors stay available.
+        """
         url = f"{API_VEHICLE}?id={self.api_vehicle_id}&format=json&lang=fr"
+        session = async_get_clientsession(self.hass)
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    url,
-                    timeout=aiohttp.ClientTimeout(total=15),
-                    headers={"User-Agent": "HomeAssistant-SNCB-Train/1.2"},
-                ) as response:
-                    # Temporary server errors → keep last good data
-                    if response.status in (502, 503, 504):
-                        _LOGGER.warning(
-                            "iRail temporary error %s for %s – keeping last data",
-                            response.status,
-                            self.api_vehicle_id,
-                        )
-                        if self._last_good_data:
-                            data = dict(self._last_good_data)
-                            data["status"] = data.get("status", "en_route")
-                            data["api_warning"] = f"http_{response.status}"
-                            data["last_update"] = dt_util.now().isoformat()
-                            return data
-                        return self._empty_data("temporary_error")
+            async with session.get(
+                url,
+                timeout=15,
+                headers={"User-Agent": "HomeAssistant-SNCB-Train/1.2.2"},
+            ) as response:
+                status = response.status
+                text = await response.text()
 
-                    if response.status == 404:
-                        return self._handle_not_found()
+                if status in (502, 503, 504):
+                    _LOGGER.warning(
+                        "iRail temporary error %s for %s",
+                        status,
+                        self.api_vehicle_id,
+                    )
+                    return self._keep_or_empty("temporary_error", f"http_{status}")
 
-                    if response.status != 200:
-                        text = await response.text()
-                        # Other errors: keep last data if possible
-                        if self._last_good_data:
-                            _LOGGER.warning(
-                                "iRail error %s for %s – keeping last data",
-                                response.status,
-                                self.api_vehicle_id,
-                            )
-                            data = dict(self._last_good_data)
-                            data["api_warning"] = f"http_{response.status}"
-                            data["last_update"] = dt_util.now().isoformat()
-                            return data
-                        raise UpdateFailed(f"API error {response.status}: {text[:150]}")
+                if status == 404:
+                    return self._handle_not_found()
 
-                    data = await response.json()
+                if status != 200:
+                    _LOGGER.warning(
+                        "iRail HTTP %s for %s: %s",
+                        status,
+                        self.api_vehicle_id,
+                        text[:200],
+                    )
+                    return self._keep_or_empty("temporary_error", f"http_{status}")
 
-        except aiohttp.ClientError as err:
-            _LOGGER.warning("Network error for %s: %s – keeping last data", self.api_vehicle_id, err)
-            if self._last_good_data:
-                data = dict(self._last_good_data)
-                data["api_warning"] = "network_error"
-                data["last_update"] = dt_util.now().isoformat()
-                return data
-            raise UpdateFailed(f"Error communicating with iRail: {err}") from err
+                # Parse JSON
+                try:
+                    import json
+
+                    data = json.loads(text)
+                except Exception as err:
+                    _LOGGER.warning("Invalid JSON from iRail for %s: %s", self.api_vehicle_id, err)
+                    return self._keep_or_empty("temporary_error", "invalid_json")
+
+                # iRail sometimes returns 200 with an exception payload
+                if isinstance(data, dict) and data.get("exception"):
+                    _LOGGER.info(
+                        "Journey not found for %s: %s",
+                        self.api_vehicle_id,
+                        data.get("message", data.get("exception")),
+                    )
+                    return self._handle_not_found()
+
+                parsed = self._parse_vehicle(data)
+
+                if parsed.get("status") not in (
+                    "not_found",
+                    "no_stops",
+                    "temporary_error",
+                    "data_lost",
+                ):
+                    self._had_live_data_today = True
+                    self._last_good_data = parsed
+
+                return parsed
+
         except Exception as err:
-            _LOGGER.warning("Unexpected error for %s: %s", self.api_vehicle_id, err)
-            if self._last_good_data:
-                data = dict(self._last_good_data)
-                data["api_warning"] = "unexpected_error"
-                data["last_update"] = dt_util.now().isoformat()
-                return data
-            raise UpdateFailed(f"Unexpected error: {err}") from err
+            _LOGGER.warning(
+                "Error fetching %s: %s – keeping last data if any",
+                self.api_vehicle_id,
+                err,
+            )
+            return self._keep_or_empty("temporary_error", "exception")
 
-        parsed = self._parse_vehicle(data)
-
-        # Remember that we had live data today
-        if parsed.get("status") not in ("not_found", "no_stops", "temporary_error"):
-            self._had_live_data_today = True
-            self._last_good_data = parsed
-
-        return parsed
+    def _keep_or_empty(self, status: str, warning: str | None = None) -> dict[str, Any]:
+        """Return last good data or empty structure."""
+        if self._last_good_data:
+            data = dict(self._last_good_data)
+            data["api_warning"] = warning
+            data["last_update"] = dt_util.now().isoformat()
+            return data
+        return self._empty_data(status, warning)
 
     def _handle_not_found(self) -> dict[str, Any]:
-        """Handle 404 / journey not found more gracefully."""
-        # If we already had live data today, don't jump to "non circulant"
+        """Handle journey not found more gracefully."""
         if self._had_live_data_today and self._last_good_data:
             _LOGGER.info(
-                "Journey %s no longer found but we had data earlier – keeping last state",
+                "Journey %s no longer found – keeping last state",
                 self.api_vehicle_id,
             )
             data = dict(self._last_good_data)
-            # If train had already passed destination, mark as passed
             if data.get("left_to"):
                 data["status"] = "passed"
             else:
@@ -136,10 +148,11 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             data["api_warning"] = "journey_not_found"
             data["last_update"] = dt_util.now().isoformat()
             return data
-
         return self._empty_data("not_found")
 
-    def _empty_data(self, status: str = "not_found") -> dict[str, Any]:
+    def _empty_data(
+        self, status: str = "not_found", warning: str | None = None
+    ) -> dict[str, Any]:
         """Return empty structure when train is not running today."""
         return {
             "status": status,
@@ -161,15 +174,18 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "arrived_from": False,
             "left_to": False,
             "arrived_to": False,
-            "api_warning": None,
+            "api_warning": warning,
             "last_update": dt_util.now().isoformat(),
         }
 
     def _find_stop(self, stops: list, station_name: str) -> dict | None:
         """Find a stop by station name (partial match)."""
         for stop in stops:
+            if not isinstance(stop, dict):
+                continue
             name = (stop.get("station") or "").lower()
-            standard = (stop.get("stationinfo", {}).get("standardname") or "").lower()
+            standard = (stop.get("stationinfo", {}) or {}).get("standardname") or ""
+            standard = standard.lower()
             if station_name in name or station_name in standard:
                 return stop
         return None
@@ -191,14 +207,33 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not ts:
             return None
         try:
-            return datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone().strftime("%H:%M")
+            return (
+                datetime.fromtimestamp(int(ts), tz=timezone.utc)
+                .astimezone()
+                .strftime("%H:%M")
+            )
         except (ValueError, TypeError):
             return None
 
+    def _normalize_stops(self, stops_raw) -> list:
+        """Ensure stops is always a list of dicts."""
+        if stops_raw is None:
+            return []
+        if isinstance(stops_raw, dict):
+            # Single stop returned as object instead of list
+            return [stops_raw]
+        if isinstance(stops_raw, list):
+            return [s for s in stops_raw if isinstance(s, dict)]
+        return []
+
     def _parse_vehicle(self, data: dict) -> dict[str, Any]:
-        """Parse the vehicle JSON focusing on the two monitored stations + current/next."""
-        vehicle_info = data.get("vehicleinfo", {})
-        stops = data.get("stops", {}).get("stop", [])
+        """Parse the vehicle JSON focusing on monitored stations + current/next."""
+        if not isinstance(data, dict):
+            return self._empty_data("no_stops")
+
+        vehicle_info = data.get("vehicleinfo") or {}
+        stops_container = data.get("stops") or {}
+        stops = self._normalize_stops(stops_container.get("stop"))
 
         if not stops:
             return self._empty_data("no_stops")
@@ -213,7 +248,6 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         next_delay = None
         current_idx = -1
 
-        # Last stop that has already left = current position
         for i, stop in enumerate(stops):
             if str(stop.get("left", "0")) == "1":
                 current_idx = i
@@ -221,12 +255,9 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 current_delay = self._get_arrival_delay_minutes(stop)
 
         if current_idx == -1:
-            # Train has not left first station yet
             current_station = stops[0].get("station")
             current_delay = self._get_arrival_delay_minutes(stops[0])
-            current_idx = -1  # next will be index 0 or 1
 
-        # Next station = first stop after current that has not left
         start_search = current_idx + 1 if current_idx >= 0 else 0
         for stop in stops[start_search:]:
             if str(stop.get("left", "0")) == "0":
@@ -234,7 +265,6 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 next_delay = self._get_arrival_delay_minutes(stop)
                 break
 
-        # Delays at monitored stations
         delay_from = self._get_arrival_delay_minutes(stop_from)
         delay_to = self._get_arrival_delay_minutes(stop_to)
 
@@ -262,8 +292,9 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             canceled = str(stop_from.get("canceled", "0")) == "1"
             left_from = str(stop_from.get("left", "0")) == "1"
             arrived_from = str(stop_from.get("arrived", "0")) == "1"
-            occ = stop_from.get("occupancy", {})
-            occupancy = occ.get("name", "unknown") if isinstance(occ, dict) else "unknown"
+            occ = stop_from.get("occupancy") or {}
+            if isinstance(occ, dict):
+                occupancy = occ.get("name", "unknown")
 
         if stop_to:
             left_to = str(stop_to.get("left", "0")) == "1"
@@ -271,7 +302,6 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if str(stop_to.get("canceled", "0")) == "1":
                 canceled = True
 
-        # Status logic
         if canceled:
             status = "canceled"
         elif stop_from is None and stop_to is None:
@@ -285,7 +315,7 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         elif arrived_from:
             status = "at_departure"
         else:
-            first_left = str(stops[0].get("left", "0")) == "1" if stops else False
+            first_left = str(stops[0].get("left", "0")) == "1"
             status = "en_route" if first_left else "not_departed"
 
         return {

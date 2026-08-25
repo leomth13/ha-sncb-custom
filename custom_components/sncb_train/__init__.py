@@ -41,10 +41,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         scan_interval=entry.options.get("scan_interval", DEFAULT_SCAN_INTERVAL),
     )
 
-    await coordinator.async_config_entry_first_refresh()
-
+    # Always register coordinator first so sensors can attach
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = coordinator
+
+    # First refresh: do not abort setup if API fails (coordinator returns empty data)
+    await coordinator.async_config_entry_first_refresh()
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
