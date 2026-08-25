@@ -25,6 +25,9 @@ async def async_setup_entry(
         SncbDelayToSensor(coordinator, entry),
         SncbStatusSensor(coordinator, entry),
         SncbCurrentStationSensor(coordinator, entry),
+        SncbCurrentDelaySensor(coordinator, entry),
+        SncbNextStationSensor(coordinator, entry),
+        SncbNextDelaySensor(coordinator, entry),
         SncbPlatformFromSensor(coordinator, entry),
     ]
 
@@ -137,6 +140,8 @@ class SncbStatusSensor(SncbBaseSensor):
             "not_found": "Non circulant aujourd'hui",
             "no_stops": "Données indisponibles",
             "station_not_found": "Gare non trouvée",
+            "temporary_error": "Erreur temporaire API",
+            "data_lost": "Données perdues (API)",
         }
         return mapping.get(status, status)
 
@@ -147,14 +152,16 @@ class SncbStatusSensor(SncbBaseSensor):
             "delay_from": data.get("delay_from_minutes"),
             "delay_to": data.get("delay_to_minutes"),
             "current_station": data.get("current_station"),
+            "next_station": data.get("next_station"),
             "scheduled_from": data.get("scheduled_from"),
             "scheduled_to": data.get("scheduled_to"),
+            "api_warning": data.get("api_warning"),
             "vehicle": data.get("vehicle"),
         }
 
 
 class SncbCurrentStationSensor(SncbBaseSensor):
-    """Last station the train has left."""
+    """Last station the train has left / current position."""
 
     _attr_name = "Position actuelle"
     _attr_icon = "mdi:map-marker"
@@ -168,6 +175,75 @@ class SncbCurrentStationSensor(SncbBaseSensor):
         if not self.coordinator.data:
             return None
         return self.coordinator.data.get("current_station")
+
+
+class SncbCurrentDelaySensor(SncbBaseSensor):
+    """Arrival delay at the current station."""
+
+    _attr_name = "Retard position actuelle"
+    _attr_native_unit_of_measurement = "min"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:clock-outline"
+
+    def __init__(self, coordinator: SncbTrainCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_current_delay"
+
+    @property
+    def native_value(self) -> int | None:
+        if not self.coordinator.data:
+            return None
+        return self.coordinator.data.get("current_delay_minutes")
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        data = self.coordinator.data or {}
+        return {
+            "station": data.get("current_station"),
+        }
+
+
+class SncbNextStationSensor(SncbBaseSensor):
+    """Next station on the route."""
+
+    _attr_name = "Prochaine gare"
+    _attr_icon = "mdi:map-marker-path"
+
+    def __init__(self, coordinator: SncbTrainCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_next_station"
+
+    @property
+    def native_value(self) -> str | None:
+        if not self.coordinator.data:
+            return None
+        return self.coordinator.data.get("next_station")
+
+
+class SncbNextDelaySensor(SncbBaseSensor):
+    """Arrival delay at the next station."""
+
+    _attr_name = "Retard prochaine gare"
+    _attr_native_unit_of_measurement = "min"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:clock-fast"
+
+    def __init__(self, coordinator: SncbTrainCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_next_delay"
+
+    @property
+    def native_value(self) -> int | None:
+        if not self.coordinator.data:
+            return None
+        return self.coordinator.data.get("next_delay_minutes")
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        data = self.coordinator.data or {}
+        return {
+            "station": data.get("next_station"),
+        }
 
 
 class SncbPlatformFromSensor(SncbBaseSensor):
