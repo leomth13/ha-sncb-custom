@@ -14,13 +14,13 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
-from .const import API_VEHICLE, DEFAULT_SCAN_INTERVAL, DOMAIN
+from .const import API_VEHICLE, DEFAULT_SCAN_INTERVAL
 
 _LOGGER = logging.getLogger(__name__)
 
 
 class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Coordinator that polls the iRail vehicle endpoint."""
+    """Polls the iRail vehicle endpoint for one train."""
 
     def __init__(
         self,
@@ -38,8 +38,8 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=timedelta(seconds=scan_interval),
         )
         self.vehicle_id = vehicle_id
-        self.station_from = station_from.lower()
-        self.station_to = station_to.lower()
+        self.station_from = station_from.lower().strip()
+        self.station_to = station_to.lower().strip()
         self.friendly_name = name
         self._had_live_data_today = False
         self._last_good_data: dict[str, Any] | None = None
@@ -51,33 +51,31 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.api_vehicle_id = f"BE.NMBS.{clean}"
 
         _LOGGER.info(
-            "Coordinator init for %s (from=%s to=%s)",
+            "Coordinator ready: %s (%s -> %s)",
             self.api_vehicle_id,
             self.station_from,
             self.station_to,
         )
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Fetch data from iRail. Always returns a dict (never raises)."""
+        """Fetch vehicle data. Always returns a dict (never raises)."""
         url = f"{API_VEHICLE}?id={self.api_vehicle_id}&format=json&lang=fr"
         session = async_get_clientsession(self.hass)
         timeout = ClientTimeout(total=25)
-
-        _LOGGER.debug("Polling %s", url)
 
         for attempt in range(3):
             try:
                 async with session.get(
                     url,
                     timeout=timeout,
-                    headers={"User-Agent": "HomeAssistant-SNCB-Train/1.2.4"},
+                    headers={"User-Agent": "HomeAssistant-SNCB-Train/1.3.0"},
                 ) as response:
                     status = response.status
                     body = await response.text()
 
                     if status in (502, 503, 504):
                         _LOGGER.warning(
-                            "iRail %s for %s (attempt %s/3)",
+                            "iRail HTTP %s for %s (try %s/3)",
                             status,
                             self.api_vehicle_id,
                             attempt + 1,
@@ -85,10 +83,9 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         if attempt < 2:
                             await asyncio.sleep(2 * (attempt + 1))
                             continue
-                        return self._keep_or_empty("temporary_error", f"http_{status}")
+                        return self._fallback("temporary_error", f"http_{status}")
 
                     if status == 404:
-                        _LOGGER.info("404 not found for %s", self.api_vehicle_id)
                         return self._handle_not_found()
 
                     if status != 200:
@@ -96,27 +93,27 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             "iRail HTTP %s for %s: %s",
                             status,
                             self.api_vehicle_id,
-                            body[:150],
+                            body[:120],
                         )
-                        return self._keep_or_empty("temporary_error", f"http_{status}")
+                        return self._fallback("temporary_error", f"http_{status}")
 
                     try:
-                        data = json.loads(body)
+                        payload = json.loads(body)
                     except Exception as err:
-                        _LOGGER.warning("JSON error for %s: %s", self.api_vehicle_id, err)
-                        return self._keep_or_empty("temporary_error", "invalid_json")
+                        _LOGGER.warning("Bad JSON for %s: %s", self.api_vehicle_id, err)
+                        return self._fallback("temporary_error", "invalid_json")
 
-                    if isinstance(data, dict) and data.get("exception"):
+                    if isinstance(payload, dict) and payload.get("exception"):
                         _LOGGER.info(
-                            "Journey exception for %s: %s",
+                            "No journey for %s: %s",
                             self.api_vehicle_id,
-                            data.get("message", data.get("exception")),
+                            payload.get("message", payload.get("exception")),
                         )
                         return self._handle_not_found()
 
-                    parsed = self._parse_vehicle(data)
+                    parsed = self._parse(payload)
                     _LOGGER.info(
-                        "%s → status=%s current=%s next=%s delay_from=%s delay_to=%s",
+                        "%s status=%s pos=%s next=%s d_from=%s d_to=%s",
                         self.api_vehicle_id,
                         parsed.get("status"),
                         parsed.get("current_station"),
@@ -138,7 +135,7 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             except Exception as err:
                 _LOGGER.warning(
-                    "Fetch error for %s (attempt %s/3): %s: %s",
+                    "Fetch error %s try %s/3: %s: %s",
                     self.api_vehicle_id,
                     attempt + 1,
                     type(err).__name__,
@@ -147,17 +144,17 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if attempt < 2:
                     await asyncio.sleep(2 * (attempt + 1))
                     continue
-                return self._keep_or_empty("temporary_error", "exception")
+                return self._fallback("temporary_error", "exception")
 
-        return self._keep_or_empty("temporary_error", "retries_exhausted")
+        return self._fallback("temporary_error", "retries_exhausted")
 
-    def _keep_or_empty(self, status: str, warning: str | None = None) -> dict[str, Any]:
+    def _fallback(self, status: str, warning: str | None = None) -> dict[str, Any]:
         if self._last_good_data:
             data = dict(self._last_good_data)
             data["api_warning"] = warning
             data["last_update"] = dt_util.now().isoformat()
             return data
-        return self._empty_data(status, warning)
+        return self._empty(status, warning)
 
     def _handle_not_found(self) -> dict[str, Any]:
         if self._had_live_data_today and self._last_good_data:
@@ -166,11 +163,9 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             data["api_warning"] = "journey_not_found"
             data["last_update"] = dt_util.now().isoformat()
             return data
-        return self._empty_data("not_found")
+        return self._empty("not_found")
 
-    def _empty_data(
-        self, status: str = "not_found", warning: str | None = None
-    ) -> dict[str, Any]:
+    def _empty(self, status: str = "not_found", warning: str | None = None) -> dict[str, Any]:
         return {
             "status": status,
             "vehicle": self.api_vehicle_id,
@@ -185,20 +180,25 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "current_delay_minutes": None,
             "next_station": None,
             "next_delay_minutes": None,
-            "occupancy": None,
             "canceled": False,
             "left_from": False,
-            "arrived_from": False,
             "left_to": False,
-            "arrived_to": False,
             "api_warning": warning,
             "last_update": dt_util.now().isoformat(),
         }
 
-    def _find_stop(self, stops: list, station_name: str) -> dict | None:
+    @staticmethod
+    def _normalize_stops(raw) -> list[dict]:
+        if raw is None:
+            return []
+        if isinstance(raw, dict):
+            return [raw]
+        if isinstance(raw, list):
+            return [s for s in raw if isinstance(s, dict)]
+        return []
+
+    def _find_stop(self, stops: list[dict], station_name: str) -> dict | None:
         for stop in stops:
-            if not isinstance(stop, dict):
-                continue
             name = (stop.get("station") or "").lower()
             info = stop.get("stationinfo") or {}
             standard = (info.get("standardname") or "").lower()
@@ -206,18 +206,20 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return stop
         return None
 
-    def _get_arrival_delay_minutes(self, stop: dict | None) -> int | None:
+    @staticmethod
+    def _arrival_delay_min(stop: dict | None) -> int | None:
         if not stop:
             return None
-        delay_sec = stop.get("arrivalDelay")
-        if delay_sec is None:
-            delay_sec = stop.get("delay")
+        raw = stop.get("arrivalDelay")
+        if raw is None:
+            raw = stop.get("delay")
         try:
-            return round(int(delay_sec or 0) / 60)
-        except (ValueError, TypeError):
+            return round(int(raw or 0) / 60)
+        except (TypeError, ValueError):
             return 0
 
-    def _format_time(self, ts) -> str | None:
+    @staticmethod
+    def _fmt_time(ts) -> str | None:
         if not ts:
             return None
         try:
@@ -226,28 +228,17 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 .astimezone()
                 .strftime("%H:%M")
             )
-        except (ValueError, TypeError):
+        except (TypeError, ValueError):
             return None
 
-    def _normalize_stops(self, stops_raw) -> list:
-        if stops_raw is None:
-            return []
-        if isinstance(stops_raw, dict):
-            return [stops_raw]
-        if isinstance(stops_raw, list):
-            return [s for s in stops_raw if isinstance(s, dict)]
-        return []
-
-    def _parse_vehicle(self, data: dict) -> dict[str, Any]:
+    def _parse(self, data: dict) -> dict[str, Any]:
         if not isinstance(data, dict):
-            return self._empty_data("no_stops")
+            return self._empty("no_stops")
 
         vehicle_info = data.get("vehicleinfo") or {}
-        stops_container = data.get("stops") or {}
-        stops = self._normalize_stops(stops_container.get("stop"))
-
+        stops = self._normalize_stops((data.get("stops") or {}).get("stop"))
         if not stops:
-            return self._empty_data("no_stops")
+            return self._empty("no_stops")
 
         stop_from = self._find_stop(stops, self.station_from)
         stop_to = self._find_stop(stops, self.station_to)
@@ -262,56 +253,46 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if str(stop.get("left", "0")) == "1":
                 current_idx = i
                 current_station = stop.get("station")
-                current_delay = self._get_arrival_delay_minutes(stop)
+                current_delay = self._arrival_delay_min(stop)
 
-        if current_idx == -1:
-            # Not departed yet → current = first stop, next = second stop
+        if current_idx < 0:
             current_station = stops[0].get("station")
-            current_delay = self._get_arrival_delay_minutes(stops[0])
+            current_delay = self._arrival_delay_min(stops[0])
             if len(stops) > 1:
                 next_station = stops[1].get("station")
-                next_delay = self._get_arrival_delay_minutes(stops[1])
+                next_delay = self._arrival_delay_min(stops[1])
         else:
             for stop in stops[current_idx + 1 :]:
                 if str(stop.get("left", "0")) == "0":
                     next_station = stop.get("station")
-                    next_delay = self._get_arrival_delay_minutes(stop)
+                    next_delay = self._arrival_delay_min(stop)
                     break
 
-        delay_from = self._get_arrival_delay_minutes(stop_from)
-        delay_to = self._get_arrival_delay_minutes(stop_to)
-
+        delay_from = self._arrival_delay_min(stop_from)
+        delay_to = self._arrival_delay_min(stop_to)
         platform_from = stop_from.get("platform") if stop_from else None
         platform_to = stop_to.get("platform") if stop_to else None
 
         scheduled_from = None
         if stop_from:
-            scheduled_from = self._format_time(
+            scheduled_from = self._fmt_time(
                 stop_from.get("scheduledArrivalTime")
                 or stop_from.get("scheduledDepartureTime")
                 or stop_from.get("time")
             )
         scheduled_to = None
         if stop_to:
-            scheduled_to = self._format_time(
+            scheduled_to = self._fmt_time(
                 stop_to.get("scheduledArrivalTime") or stop_to.get("time")
             )
 
         canceled = False
-        left_from = arrived_from = left_to = arrived_to = False
-        occupancy = "unknown"
-
+        left_from = left_to = False
         if stop_from:
             canceled = str(stop_from.get("canceled", "0")) == "1"
             left_from = str(stop_from.get("left", "0")) == "1"
-            arrived_from = str(stop_from.get("arrived", "0")) == "1"
-            occ = stop_from.get("occupancy") or {}
-            if isinstance(occ, dict):
-                occupancy = occ.get("name", "unknown")
-
         if stop_to:
             left_to = str(stop_to.get("left", "0")) == "1"
-            arrived_to = str(stop_to.get("arrived", "0")) == "1"
             if str(stop_to.get("canceled", "0")) == "1":
                 canceled = True
 
@@ -321,15 +302,12 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             status = "station_not_found"
         elif left_to:
             status = "passed"
-        elif arrived_to:
-            status = "at_destination"
         elif left_from:
             status = "en_route"
-        elif arrived_from:
-            status = "at_departure"
+        elif str(stops[0].get("left", "0")) == "1":
+            status = "en_route"
         else:
-            first_left = str(stops[0].get("left", "0")) == "1"
-            status = "en_route" if first_left else "not_departed"
+            status = "not_departed"
 
         return {
             "status": status,
@@ -345,12 +323,9 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "current_delay_minutes": current_delay,
             "next_station": next_station,
             "next_delay_minutes": next_delay,
-            "occupancy": occupancy,
             "canceled": canceled,
             "left_from": left_from,
-            "arrived_from": arrived_from,
             "left_to": left_to,
-            "arrived_to": arrived_to,
             "api_warning": None,
             "last_update": dt_util.now().isoformat(),
         }

@@ -38,14 +38,10 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
 class SncbTrainConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for SNCB Train Tracker."""
 
-    VERSION = 2
+    VERSION = 1
 
-    async def async_step_user(
-        self, user_input: dict | None = None
-    ) -> FlowResult:
+    async def async_step_user(self, user_input: dict | None = None) -> FlowResult:
         """Handle the initial step."""
-        errors: dict[str, str] = {}
-
         if user_input is not None:
             vehicle_id = user_input[CONF_VEHICLE_ID].strip().upper()
             clean_id = vehicle_id.replace("BE.NMBS.", "").replace(" ", "")
@@ -65,8 +61,4 @@ class SncbTrainConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 },
             )
 
-        return self.async_show_form(
-            step_id="user",
-            data_schema=STEP_USER_DATA_SCHEMA,
-            errors=errors,
-        )
+        return self.async_show_form(step_id="user", data_schema=STEP_USER_DATA_SCHEMA)

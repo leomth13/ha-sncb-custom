@@ -1,4 +1,4 @@
-"""Sensor platform for SNCB Train Tracker."""
+"""Sensors for SNCB Train Tracker."""
 
 from __future__ import annotations
 
@@ -12,31 +12,43 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 from .coordinator import SncbTrainCoordinator
 
+STATUS_FR = {
+    "not_departed": "Pas encore parti",
+    "en_route": "En route",
+    "passed": "Déjà passé",
+    "canceled": "Annulé",
+    "not_found": "Non circulant aujourd'hui",
+    "no_stops": "Données indisponibles",
+    "station_not_found": "Gare non trouvée",
+    "temporary_error": "Erreur temporaire API",
+    "data_lost": "Données perdues (API)",
+}
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up sensors from a config entry."""
+    """Set up sensors."""
     coordinator: SncbTrainCoordinator = hass.data[DOMAIN][entry.entry_id]
+    async_add_entities(
+        [
+            StatusSensor(coordinator, entry),
+            CurrentStationSensor(coordinator, entry),
+            CurrentDelaySensor(coordinator, entry),
+            NextStationSensor(coordinator, entry),
+            NextDelaySensor(coordinator, entry),
+            DelayFromSensor(coordinator, entry),
+            DelayToSensor(coordinator, entry),
+            PlatformFromSensor(coordinator, entry),
+        ],
+        True,
+    )
 
-    sensors = [
-        SncbStatusSensor(coordinator, entry),
-        SncbCurrentStationSensor(coordinator, entry),
-        SncbCurrentDelaySensor(coordinator, entry),
-        SncbNextStationSensor(coordinator, entry),
-        SncbNextDelaySensor(coordinator, entry),
-        SncbDelayFromSensor(coordinator, entry),
-        SncbDelayToSensor(coordinator, entry),
-        SncbPlatformFromSensor(coordinator, entry),
-    ]
 
-    async_add_entities(sensors, update_before_add=True)
-
-
-class SncbBaseSensor(CoordinatorEntity[SncbTrainCoordinator], SensorEntity):
-    """Base class for SNCB train sensors."""
+class BaseSncbSensor(CoordinatorEntity[SncbTrainCoordinator], SensorEntity):
+    """Shared base."""
 
     _attr_has_entity_name = True
 
@@ -52,12 +64,15 @@ class SncbBaseSensor(CoordinatorEntity[SncbTrainCoordinator], SensorEntity):
 
     @property
     def available(self) -> bool:
-        """Always available once coordinator has returned any payload."""
         return self.coordinator.data is not None
 
+    @property
+    def _data(self) -> dict:
+        return self.coordinator.data or {}
 
-class SncbStatusSensor(SncbBaseSensor):
-    """Overall status of the train."""
+
+class StatusSensor(BaseSncbSensor):
+    """Train status."""
 
     _attr_name = "Statut"
     _attr_icon = "mdi:train"
@@ -68,42 +83,27 @@ class SncbStatusSensor(SncbBaseSensor):
 
     @property
     def native_value(self) -> str:
-        data = self.coordinator.data or {}
-        status = data.get("status") or "unknown"
-        mapping = {
-            "not_departed": "Pas encore parti",
-            "at_departure": "À quai (départ)",
-            "en_route": "En route",
-            "at_destination": "À quai (arrivée)",
-            "passed": "Déjà passé",
-            "canceled": "Annulé",
-            "not_found": "Non circulant aujourd'hui",
-            "no_stops": "Données indisponibles",
-            "station_not_found": "Gare non trouvée",
-            "temporary_error": "Erreur temporaire API",
-            "data_lost": "Données perdues (API)",
-            "unknown": "Inconnu",
-        }
-        return mapping.get(status, status)
+        status = self._data.get("status") or "unknown"
+        return STATUS_FR.get(status, status)
 
     @property
     def extra_state_attributes(self) -> dict:
-        data = self.coordinator.data or {}
+        d = self._data
         return {
-            "delay_from": data.get("delay_from_minutes"),
-            "delay_to": data.get("delay_to_minutes"),
-            "current_station": data.get("current_station"),
-            "next_station": data.get("next_station"),
-            "scheduled_from": data.get("scheduled_from"),
-            "scheduled_to": data.get("scheduled_to"),
-            "api_warning": data.get("api_warning"),
-            "vehicle": data.get("vehicle"),
-            "last_update": data.get("last_update"),
+            "vehicle": d.get("vehicle"),
+            "current_station": d.get("current_station"),
+            "next_station": d.get("next_station"),
+            "delay_from": d.get("delay_from_minutes"),
+            "delay_to": d.get("delay_to_minutes"),
+            "scheduled_from": d.get("scheduled_from"),
+            "scheduled_to": d.get("scheduled_to"),
+            "api_warning": d.get("api_warning"),
+            "last_update": d.get("last_update"),
         }
 
 
-class SncbCurrentStationSensor(SncbBaseSensor):
-    """Current / last station."""
+class CurrentStationSensor(BaseSncbSensor):
+    """Current position."""
 
     _attr_name = "Position actuelle"
     _attr_icon = "mdi:map-marker"
@@ -114,17 +114,16 @@ class SncbCurrentStationSensor(SncbBaseSensor):
 
     @property
     def native_value(self) -> str | None:
-        data = self.coordinator.data or {}
-        return data.get("current_station")
+        return self._data.get("current_station")
 
 
-class SncbCurrentDelaySensor(SncbBaseSensor):
+class CurrentDelaySensor(BaseSncbSensor):
     """Delay at current station."""
 
     _attr_name = "Retard position actuelle"
+    _attr_icon = "mdi:clock-outline"
     _attr_native_unit_of_measurement = "min"
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_icon = "mdi:clock-outline"
 
     def __init__(self, coordinator: SncbTrainCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry)
@@ -132,16 +131,10 @@ class SncbCurrentDelaySensor(SncbBaseSensor):
 
     @property
     def native_value(self) -> int | None:
-        data = self.coordinator.data or {}
-        return data.get("current_delay_minutes")
-
-    @property
-    def extra_state_attributes(self) -> dict:
-        data = self.coordinator.data or {}
-        return {"station": data.get("current_station")}
+        return self._data.get("current_delay_minutes")
 
 
-class SncbNextStationSensor(SncbBaseSensor):
+class NextStationSensor(BaseSncbSensor):
     """Next station."""
 
     _attr_name = "Prochaine gare"
@@ -153,17 +146,16 @@ class SncbNextStationSensor(SncbBaseSensor):
 
     @property
     def native_value(self) -> str | None:
-        data = self.coordinator.data or {}
-        return data.get("next_station")
+        return self._data.get("next_station")
 
 
-class SncbNextDelaySensor(SncbBaseSensor):
+class NextDelaySensor(BaseSncbSensor):
     """Delay at next station."""
 
     _attr_name = "Retard prochaine gare"
+    _attr_icon = "mdi:clock-fast"
     _attr_native_unit_of_measurement = "min"
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_icon = "mdi:clock-fast"
 
     def __init__(self, coordinator: SncbTrainCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry)
@@ -171,21 +163,15 @@ class SncbNextDelaySensor(SncbBaseSensor):
 
     @property
     def native_value(self) -> int | None:
-        data = self.coordinator.data or {}
-        return data.get("next_delay_minutes")
-
-    @property
-    def extra_state_attributes(self) -> dict:
-        data = self.coordinator.data or {}
-        return {"station": data.get("next_station")}
+        return self._data.get("next_delay_minutes")
 
 
-class SncbDelayFromSensor(SncbBaseSensor):
-    """Arrival delay at departure station."""
+class DelayFromSensor(BaseSncbSensor):
+    """Arrival delay at configured from station."""
 
+    _attr_icon = "mdi:clock-alert-outline"
     _attr_native_unit_of_measurement = "min"
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_icon = "mdi:clock-alert-outline"
 
     def __init__(self, coordinator: SncbTrainCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry)
@@ -194,25 +180,22 @@ class SncbDelayFromSensor(SncbBaseSensor):
 
     @property
     def native_value(self) -> int | None:
-        data = self.coordinator.data or {}
-        return data.get("delay_from_minutes")
+        return self._data.get("delay_from_minutes")
 
     @property
     def extra_state_attributes(self) -> dict:
-        data = self.coordinator.data or {}
         return {
-            "scheduled": data.get("scheduled_from"),
-            "platform": data.get("platform_from"),
-            "last_update": data.get("last_update"),
+            "scheduled": self._data.get("scheduled_from"),
+            "platform": self._data.get("platform_from"),
         }
 
 
-class SncbDelayToSensor(SncbBaseSensor):
-    """Arrival delay at destination station."""
+class DelayToSensor(BaseSncbSensor):
+    """Arrival delay at configured to station."""
 
+    _attr_icon = "mdi:clock-alert"
     _attr_native_unit_of_measurement = "min"
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_icon = "mdi:clock-alert"
 
     def __init__(self, coordinator: SncbTrainCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry)
@@ -221,21 +204,18 @@ class SncbDelayToSensor(SncbBaseSensor):
 
     @property
     def native_value(self) -> int | None:
-        data = self.coordinator.data or {}
-        return data.get("delay_to_minutes")
+        return self._data.get("delay_to_minutes")
 
     @property
     def extra_state_attributes(self) -> dict:
-        data = self.coordinator.data or {}
         return {
-            "scheduled": data.get("scheduled_to"),
-            "platform": data.get("platform_to"),
-            "last_update": data.get("last_update"),
+            "scheduled": self._data.get("scheduled_to"),
+            "platform": self._data.get("platform_to"),
         }
 
 
-class SncbPlatformFromSensor(SncbBaseSensor):
-    """Platform at departure station."""
+class PlatformFromSensor(BaseSncbSensor):
+    """Platform at from station."""
 
     _attr_icon = "mdi:railroad-light"
 
@@ -246,5 +226,4 @@ class SncbPlatformFromSensor(SncbBaseSensor):
 
     @property
     def native_value(self) -> str | None:
-        data = self.coordinator.data or {}
-        return data.get("platform_from")
+        return self._data.get("platform_from")
