@@ -64,7 +64,8 @@ class BaseSncbSensor(CoordinatorEntity[SncbTrainCoordinator], SensorEntity):
 
     @property
     def available(self) -> bool:
-        return self.coordinator.data is not None
+        # Always available so UI never shows "indisponible"
+        return True
 
     @property
     def _data(self) -> dict:
