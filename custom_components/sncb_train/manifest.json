@@ -1,5 +1,5 @@
 {
-  "domain": "nmbs",
+  "domain": "sncb_train",
   "name": "SNCB Train Tracker",
   "codeowners": ["@local"],
   "config_flow": true,
