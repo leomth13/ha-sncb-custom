@@ -50,7 +50,7 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         else:
             self.api_vehicle_id = f"BE.NMBS.{clean}"
 
-        _LOGGER.info(
+        _LOGGER.warning(
             "Coordinator ready: %s (%s -> %s)",
             self.api_vehicle_id,
             self.station_from,
@@ -112,7 +112,7 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         return self._handle_not_found()
 
                     parsed = self._parse(payload)
-                    _LOGGER.info(
+                    _LOGGER.warning(
                         "%s status=%s pos=%s next=%s d_from=%s d_to=%s",
                         self.api_vehicle_id,
                         parsed.get("status"),
