@@ -3,17 +3,14 @@
     "step": {
       "user": {
         "title": "Add SNCB train",
-        "description": "Enter the train number (e.g. IC2108 or IC2508). Default monitored station is Gembloux.",
+        "description": "Train number (e.g. IC2108). Default stations: Gembloux → Namur.",
         "data": {
           "vehicle_id": "Train number",
-          "station": "Station to monitor",
+          "station_from": "Departure station to monitor",
+          "station_to": "Arrival station to monitor",
           "name": "Display name (optional)"
         }
       }
-    },
-    "error": {
-      "cannot_connect": "Unable to reach iRail API",
-      "invalid_vehicle": "Invalid train number"
     },
     "abort": {
       "already_configured": "This train is already configured"
