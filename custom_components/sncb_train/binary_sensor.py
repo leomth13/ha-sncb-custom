@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from homeassistant.components.binary_sensor import (
-    BinarySensorDeviceClass,
-    BinarySensorEntity,
-)
+from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -32,14 +29,14 @@ class ArrivedFromBinarySensor(
     """True when the train has arrived at the monitored departure station."""
 
     _attr_has_entity_name = True
-    _attr_device_class = BinarySensorDeviceClass.PRESENCE
+    # No device_class → generic on/off (not "Home"/"Away")
     _attr_icon = "mdi:train-car"
 
     def __init__(self, coordinator: SncbTrainCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
         self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_arrived_from"
-        self._attr_name = f"À quai {coordinator.station_from.title()}"
+        self._attr_name = f"Départ · À quai {coordinator.station_from.title()}"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name=coordinator.friendly_name,
