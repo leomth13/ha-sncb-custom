@@ -32,7 +32,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     station_to = entry.data.get(CONF_STATION_TO, DEFAULT_STATION_TO)
     name = entry.data.get(CONF_NAME, vehicle_id)
 
-    _LOGGER.info("Setting up SNCB train %s (%s -> %s)", vehicle_id, station_from, station_to)
+    # WARNING level so it always appears in HA UI logs
+    _LOGGER.warning(
+        "SNCB setup start: train=%s from=%s to=%s entry=%s",
+        vehicle_id,
+        station_from,
+        station_to,
+        entry.entry_id,
+    )
 
     coordinator = SncbTrainCoordinator(
         hass=hass,
@@ -46,10 +53,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
-    await coordinator.async_config_entry_first_refresh()
+    # Use async_refresh (NOT first_refresh) so a failed poll never blocks sensor setup
+    try:
+        await coordinator.async_refresh()
+    except Exception as err:
+        _LOGGER.warning("SNCB first refresh error (continuing): %s", err)
+
+    _LOGGER.warning(
+        "SNCB coordinator data after refresh: %s",
+        None if coordinator.data is None else coordinator.data.get("status"),
+    )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
+
+    _LOGGER.warning("SNCB setup done for %s", vehicle_id)
     return True
 
 
