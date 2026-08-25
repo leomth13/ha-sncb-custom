@@ -50,7 +50,8 @@ class SncbBaseSensor(CoordinatorEntity[SncbTrainCoordinator], SensorEntity):
 
     @property
     def available(self) -> bool:
-        return self.coordinator.last_update_success and self.coordinator.data is not None
+        # Keep sensors available as long as we have data (even after a failed poll)
+        return self.coordinator.data is not None
 
 
 class SncbDelayFromSensor(SncbBaseSensor):
