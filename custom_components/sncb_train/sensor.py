@@ -42,6 +42,7 @@ async def async_setup_entry(
             DelayFromSensor(coordinator, entry),
             DelayToSensor(coordinator, entry),
             PlatformFromSensor(coordinator, entry),
+            PlatformToSensor(coordinator, entry),
         ],
         True,
     )
@@ -228,3 +229,18 @@ class PlatformFromSensor(BaseSncbSensor):
     @property
     def native_value(self) -> str | None:
         return self._data.get("platform_from")
+
+
+class PlatformToSensor(BaseSncbSensor):
+    """Platform at to station."""
+
+    _attr_icon = "mdi:railroad-light"
+
+    def __init__(self, coordinator: SncbTrainCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_platform_to"
+        self._attr_name = f"Quai {coordinator.station_to.title()}"
+
+    @property
+    def native_value(self) -> str | None:
+        return self._data.get("platform_to")
