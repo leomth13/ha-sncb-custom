@@ -183,6 +183,7 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "canceled": False,
             "left_from": False,
             "left_to": False,
+            "arrived_from": False,
             "api_warning": warning,
             "last_update": dt_util.now().isoformat(),
         }
@@ -288,9 +289,11 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         canceled = False
         left_from = left_to = False
+        arrived_from = False
         if stop_from:
             canceled = str(stop_from.get("canceled", "0")) == "1"
             left_from = str(stop_from.get("left", "0")) == "1"
+            arrived_from = str(stop_from.get("arrived", "0")) == "1"
         if stop_to:
             left_to = str(stop_to.get("left", "0")) == "1"
             if str(stop_to.get("canceled", "0")) == "1":
@@ -326,6 +329,7 @@ class SncbTrainCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "canceled": canceled,
             "left_from": left_from,
             "left_to": left_to,
+            "arrived_from": arrived_from,
             "api_warning": None,
             "last_update": dt_util.now().isoformat(),
         }
